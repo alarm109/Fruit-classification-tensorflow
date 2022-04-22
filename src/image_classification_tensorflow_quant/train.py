@@ -1,22 +1,23 @@
 import tensorflow as tf
 import tensorflow.keras as K
+import tensorflow.keras.backend as KBackend
 from tensorflow.keras.optimizers import RMSprop, Adam
 from tensorflow.keras.callbacks import ModelCheckpoint
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 from datetime import datetime
 import pathlib
-from model import create_model
+from model import create_model, create_model_with_weight
+from utils.csv import write_results_to_csv
 
 train_dir = "/Users/matas/Documents/projects/university/Fruit-classification-tensorflow/Training"
 test_dir = "/Users/matas/Documents/projects/university/Fruit-classification-tensorflow/Test"
 weight_file = "weights_best.hdf5"
 
-epochs = 10
+epochs = 5
 batch_size = 64
 label_file = "labels.txt"
 image_size = (100, 100)  # width and height of the used images
 
-# Total train and val images of dataset
 logdir = "logs/scalars/" + datetime.now().strftime("%Y%m%d-%H%M%S")
 
 with open(label_file, "r") as f:
@@ -51,14 +52,31 @@ def train(
     return history
 
 
+def f1_metric(y_true, y_pred):
+    true_positives = KBackend.sum(KBackend.round(KBackend.clip(y_true * y_pred, 0, 1)))
+    possible_positives = KBackend.sum(KBackend.round(KBackend.clip(y_true, 0, 1)))
+    predicted_positives = KBackend.sum(KBackend.round(KBackend.clip(y_pred, 0, 1)))
+    precision = true_positives / (predicted_positives + KBackend.epsilon())
+    recall = true_positives / (possible_positives + KBackend.epsilon())
+    f1_val = 2 * (precision * recall) / (precision + recall + KBackend.epsilon())
+    return f1_val
+
+
 def main():
     model = create_model(num_classes)
+
     model.compile(
         optimizer=Adam(0.001),
         loss="categorical_crossentropy",
-        metrics=["accuracy"]
+        metrics=[
+            tf.keras.metrics.Accuracy(),
+            tf.keras.metrics.Recall(),
+            tf.keras.metrics.Precision(),
+            f1_metric,
+            tf.keras.metrics.AUC()
+        ]
     )
-    print("Ieva")
+
     train_datagen = ImageDataGenerator(rescale=1/255.0,
                                     rotation_range=20,
                                     horizontal_flip=True,
@@ -72,13 +90,30 @@ def main():
     #show_images(train_data)
     test_datagen=ImageDataGenerator(rescale=1/255.0)
     test_data=test_datagen.flow_from_directory(test_dir,target_size=(100,100),batch_size=batch_size,classes=labels)
-    his = train(
+
+    train(
         model,
         train_data,
         test_data
     )
-    score = model.evaluate(test_data, verbose=0)
-    print("Test accuracy Non quantized model:", score)
+
+    best_model = create_model_with_weight(num_classes, weight_file)
+    best_model.compile(
+        optimizer=Adam(0.001),
+        loss="categorical_crossentropy",
+        metrics=[
+            tf.keras.metrics.Accuracy(),
+            tf.keras.metrics.Recall(),
+            tf.keras.metrics.Precision(),
+            f1_metric,
+            tf.keras.metrics.AUC()
+        ]
+    )
+
+    results = best_model.evaluate(test_data, verbose=1)
+    write_results_to_csv(results, epochs, batch_size)
+
+    print("Test accuracy Non quantized model:", results)
 
 
 def post_quantization(model):
@@ -101,9 +136,8 @@ def post_quantization(model):
 
 
 def convert():
-    model = create_model(num_classes)
-    print(weight_file)
-    model.load_weights(weight_file)
+    model = create_model_with_weight(num_classes, weight_file)
+
     print("Starting Evaluation of converted models ...")
     test_datagen = ImageDataGenerator(rescale=1 / 255.0)
     test_data = test_datagen.flow_from_directory(test_dir, target_size=image_size, batch_size=batch_size)

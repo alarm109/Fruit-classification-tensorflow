@@ -25,4 +25,10 @@ def create_model(num_classes):
     model = K.Model(inputs=pre_trained_model.input, outputs=x)
 
     return model
-    
+
+
+def create_model_with_weight(number_classes, weight_file):
+    model = create_model(num_classes=number_classes)
+    model.load_weights(weight_file)
+
+    return model
